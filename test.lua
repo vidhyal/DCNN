@@ -1,6 +1,17 @@
+require 'nn'
+require 'torch'
+require 'optim'
+require 'image'
+require 'paths'
+require 'gnuplot'
+
+
 package.path = package.path ..";".. paths.cwd().."/dataload/?.lua"
 --print(package.path)
 dl = require 'dataload'
+
+
+trainLogger = optim.Logger(paths.concat('log', 'train.log'))
 
 function loadData(dataPath)
 
@@ -17,7 +28,7 @@ end ]]--
    print( key .."     "..type(value))
 end]]--
 
-indices = torch.LongTensor():range(1, train.dataset.nsample)
+indices =  torch.LongTensor():range(1, train.dataset.nsample)
 inputs, targets = train.dataset:index(indices)
 
 
@@ -26,58 +37,105 @@ print("val")
 
 indV = torch.LongTensor():range(1, val.dataset.nsample)
 inV, tarV = val.dataset:index(indV)
-return inputs, targets, inV, tarV
-end
-
-loadData()
-
-function train(model, inputs, targets)
-	
-
+return inputs, targets, inV, tarV, train.dataset.classes
 end
 
 
 
 
 
+trainIn, trainTar, valIn, valTar, classes = loadData()
+
+--print(classes)
+
+-- assume #classes = 1000
+dim = trainIn:size()
+nSamples = dim[1]
+nDim = dim[2]
+xPix = dim[3]
+yPix = dim[4]
+
+print(dim)
+
+model = nn.Sequential()
+model:add(nn.SpatialConvolutionMM(3,33,5,5))
+model:add(nn.Sigmoid())
+model:add(nn.SpatialMaxPooling(3,3,3,3,1,1))
+
+model:add(nn.SpatialConvolutionMM(33,132,3,3))
+model:add(nn.Sigmoid())
+model:add(nn.SpatialMaxPooling(3,3,3,3,1,1))
+
+model:add(nn.Reshape(24*24*132))
+model:add(nn.Linear(24*24*132, 2000))
+model:add(nn.Sigmoid())
+model:add(nn.Linear(2000, #classes)) 
+
+model:add(nn.LogSoftMax())
+criterion = nn.ClassNLLCriterion()
+print(model)
+
+--[[ TODO: Normalize data]]--
+
+confusion = optim.ConfusionMatrix(classes)
 
 
 
+	params, gradParams = model:getParameters()
+
+function train(inputs, targets)
+	epoch = epoch or 1
+	print ('training epoch '.. epoch )
 
 
+	-- [[TODO: add batch processing later]]--    
 
---[[for i = 1, train.dataset.nsample do
-   print(i)
-   indices = torch.LongTensor{i}
-	inputs, targets = train.dataset:index(indices)
-	print(inputs:size())
-    print(targets)
-   io.read()
-end]]--
+	local feval = function(x)
+		collectgarbage()
+		if x~=params then
+			params:copy(x)
+		end
+	  
+		gradParams:zero()
 
+		local outputs = model:forward(inputs)
+        local f = criterion:forward(outputs, targets)
 
+		local df_do = criterion:backward(outputs, targets)
+		model:backward(inputs, df_do)
 
+		outputs = model:forward(inputs)
 
---print( train.dataset:getImageBuffer(1))
-
-
---print (type(train.dataset.imageClass))
---print(train.classinfo[932])
---print(train.classinfo[1855])
---print(train.dataset.classList[1])
-
-
---print(train.dataset.classListSample[2])
---print (train.dataset.imageClass)
---[[print(train.dataset.imgBuffers)
-print (train.dataset)]]--
---print(val.dataset.imageClass)
---[[local count = 0;
-for i,v in pairs(val.dataset.iclasses) do
-	if  (train.dataset.iclasses[i] ==nil) then
-        print(i.. "    ".. v)
-		io.read()
-		count = count +1
+		for i = 1, inputs:size()[1] do
+			confusion:add(outputs[i], targets[i])
+		end
+		return f, gradParams
 	end
+
+
+	sgdState = sgdState or {
+		learningRate = 0.01,
+		momentum = 0.005,
+		learningRateDecay = 5e-7
+	}
+
+
+	optim.sgd(feval, params, sgdState)
+	--xlua.progress()
+
+	print ("trained")
+	print(confusion)
+	trainLogger:add{['trainAcc'] = confusion.totalValid*100}
+	confusion:zero()
+	epoch = epoch+1
 end
-print(count)]]--
+
+
+trainIn = trainIn:double()
+
+while true do
+	train(trainIn, trainTar)
+
+--	trainLogger:style{['trainAcc'] = '-+'}
+--	trainLogger:plot()
+end

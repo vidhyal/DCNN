@@ -1,3 +1,5 @@
+--  Reused from Element Inc. (Nicholas Leonard)
+
 require 'dp'
 
 cmd = torch.CmdLine()
